@@ -71,12 +71,22 @@ jobs:
             --input plan.tfplan.json \
             'data.terraform.governance.deny'
 
+      
       - name: Enforce OPA Governance
         run: |
-          opa eval \
-            --fail \
-            --format pretty \
+          decision=$(opa eval \
+            --format raw \
             --data policies \
             --data exemptions.json \
             --input plan.tfplan.json \
-            'data.terraform.governance.allow == true'
+            'data.terraform.governance.allow')
+
+          echo "OPA Governance Decision: $decision"
+
+          if [ "$decision" != "true" ]; then
+            echo "OPA policy validation FAILED"
+            exit 1
+          fi
+
+          echo "OPA policy validation PASSED"
+
