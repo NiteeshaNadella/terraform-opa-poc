@@ -1,0 +1,82 @@
+
+name: Terraform OPA Policy Validation
+
+on:
+  push:
+    branches:
+      - main
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  terraform-opa:
+    name: Terraform and OPA Validation
+    runs-on: ubuntu-latest
+
+    env:
+      ARM_USE_OIDC: "true"
+      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      TF_VAR_vm_ssh_public_key: ${{ secrets.VM_SSH_PUBLIC_KEY }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Terraform Init
+        run: terraform init -input=false
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        run: terraform plan -input=false -out=plan.tfplan
+
+      - name: Convert Terraform Plan to JSON
+        run: terraform show -json plan.tfplan > plan.tfplan.json
+
+      - name: Install OPA
+        run: |
+          curl -fsSL -o opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64_static
+          chmod +x opa
+          sudo mv opa /usr/local/bin/opa
+          opa version
+
+      - name: Validate OPA Policies
+        run: opa check policies
+
+      - name: Show Policy Violations
+        run: |
+          opa eval \
+            --format pretty \
+            --data policies \
+            --data exemptions.json \
+            --input plan.tfplan.json \
+            'data.terraform.governance.deny'
+
+      - name: Enforce OPA Governance
+        run: |
+          opa eval \
+            --fail \
+            --format pretty \
+            --data policies \
+            --data exemptions.json \
+            --input plan.tfplan.json \
+            'data.terraform.governance.allow == true'

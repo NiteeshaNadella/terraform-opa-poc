@@ -1,0 +1,13 @@
+
+{
+  "exemptions": [
+    {
+      "policy": "vm_size",
+      "resource": "azurerm_linux_virtual_machine.example",
+      "approved_size": "Standard_D8s_v5",
+      "reason": "Temporary performance testing",
+      "ticket": "CHG-1001",
+      "expires_at": "2026-10-30T23:59:59Z"
+    }
+  ]
+}
