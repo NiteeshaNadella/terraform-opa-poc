@@ -741,6 +741,10 @@ Set back to Allow changes to False made Policy Passed.
 <img width="1353" height="683" alt="image" src="https://github.com/user-attachments/assets/8c6d17b8-54a0-418a-9fdb-81777075cd1c" />
 
 
+non-exempted violations continue to fail the validation.
+
+<img width="1342" height="691" alt="image" src="https://github.com/user-attachments/assets/76c67f46-aa05-45b5-a76d-8c16b179fb4c" />
+
 
 
 
