@@ -6,6 +6,8 @@ This project demonstrates the implementation of **Open Policy Agent (OPA)** for 
 
 OPA policies are integrated into a GitHub Actions workflow to enforce infrastructure governance and compliance requirements before infrastructure deployment.
 
+<img width="537" height="435" alt="image" src="https://github.com/user-attachments/assets/560ed3d8-342a-463c-8eb5-a143bed1ca34" />
+
 **The POC implements three governance policies:**
 
 1. Mandatory resource tags
@@ -694,3 +696,58 @@ Three OPA policies validate mandatory resource tags, approved VM sizes, and Stor
 The exemption mechanism supports narrowly scoped exceptions while preserving enforcement of unrelated policies.
 
 Successful and failed GitHub Actions executions confirm that the workflow can approve compliant Terraform plans and reject non-exempted governance violations before infrastructure deployment.
+
+
+**Here are screenshots of Some Policy changes:**
+
+Policy Passed= Tags
+
+<img width="1352" height="685" alt="image" src="https://github.com/user-attachments/assets/e86b6763-cbc6-4e26-a5e3-93a450feaf09" />
+
+Policy Failed= Tags
+
+<img width="1344" height="678" alt="image" src="https://github.com/user-attachments/assets/80d0ce14-2c80-4615-baec-083a7dd5d751" />
+
+Blob Access Disabled- Pass
+
+<img width="1341" height="683" alt="image" src="https://github.com/user-attachments/assets/8101868b-c23a-4273-95fc-5d3bcb1eeee6" />
+
+Blob Access permitted- Failed under policy
+
+<img width="1339" height="694" alt="image" src="https://github.com/user-attachments/assets/4db629a4-1100-43ed-afb1-a3954fe274e9" />
+
+Policy Failed due to Unapproved size Standard_D8s_v5
+
+<img width="1357" height="686" alt="image" src="https://github.com/user-attachments/assets/a4ca2d91-de27-4294-bf60-9c90c2d1e9ea" />
+
+Policy Passed with Approved VM Size
+
+<img width="1345" height="681" alt="image" src="https://github.com/user-attachments/assets/e5656696-5e4a-4df9-a55f-549dea387751" />
+
+VM Size Failed but Passed due to Exception
+
+<img width="1342" height="705" alt="image" src="https://github.com/user-attachments/assets/39d7d2b0-5502-487e-9957-726bba3f1c08" />
+
+Governance Pass (Instead of checking each Policy we can Combine together)
+
+<img width="1331" height="678" alt="image" src="https://github.com/user-attachments/assets/8fb68cf9-c651-45f8-9364-0bd630aeb2d3" />
+
+Governance Failed Scenario
+
+<img width="1352" height="697" alt="image" src="https://github.com/user-attachments/assets/c54dd472-6b3b-4cce-8184-7f12e78e3c65" />
+
+Set back to Allow changes to False made Policy Passed.
+
+<img width="1353" height="683" alt="image" src="https://github.com/user-attachments/assets/8c6d17b8-54a0-418a-9fdb-81777075cd1c" />
+
+
+
+
+
+
+
+
+
+
+
+
