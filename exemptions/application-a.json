@@ -8,6 +8,15 @@
       "reason": "Temporary performance testing for Application A",
       "ticket": "POC-APP-A-001",
       "expires_at": "2026-11-30T23:59:59Z"
+    },
+    {
+      "application": "application-a",
+      "policy": "vm_size",
+      "resource": "azurerm_linux_virtual_machine.example",
+      "approved_size": "Standard_D4s_v5",
+      "reason": "Temporary testing requires an additional VM size.",
+      "ticket": "POC-APP-001",
+      "expires_at": "2026-11-30T23:59:59Z"
     }
   ]
 }
