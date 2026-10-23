@@ -15,7 +15,7 @@
       "resource": "azurerm_linux_virtual_machine.example",
       "approved_size": "Standard_D4s_v5",
       "reason": "Temporary testing requires an additional VM size.",
-      "ticket": "POC-APP-001",
+      "ticket": "POC-APP-003",
       "expires_at": "2026-11-30T23:59:59Z"
     }
   ]
