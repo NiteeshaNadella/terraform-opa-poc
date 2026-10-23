@@ -1,4 +1,3 @@
-
 {
   "exemptions": [
     {
@@ -7,6 +6,21 @@
       "approved_size": "Standard_D8s_v5",
       "reason": "Temporary performance testing",
       "ticket": "CHG-1001",
+      "expires_at": "2026-10-30T23:59:59Z"
+    },
+    {
+      "policy": "tags",
+      "resource": "azurerm_storage_account.example",
+      "tag": "costcenter",
+      "reason": "Temporary exception for cost center tagging",
+      "ticket": "CHG-1002",
+      "expires_at": "2026-10-30T23:59:59Z"
+    },
+    {
+      "policy": "storage_security",
+      "resource": "azurerm_storage_account.example",
+      "reason": "Temporary public blob access for integration testing",
+      "ticket": "CHG-1003",
       "expires_at": "2026-10-30T23:59:59Z"
     }
   ]
