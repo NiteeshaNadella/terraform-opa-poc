@@ -1,0 +1,90 @@
+name: OPA Policy Exemption Request
+
+description: Request an exemption from an OPA infrastructure governance policy.
+
+title: "[OPA Exemption] "
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## OPA Policy Exemption Request
+        Complete this form to request a policy exemption.
+
+        All requests require review and approval.
+        Submitting this form does not automatically grant an exemption.
+
+  - type: dropdown
+    id: application
+    attributes:
+      label: Application Name
+      description: Select the application requesting an exemption.
+      options:
+        - application-a
+        - application-b
+    validations:
+      required: true
+
+  - type: dropdown
+    id: policy
+    attributes:
+      label: OPA Policy
+      description: Select the policy requiring an exemption.
+      options:
+        - vm_size
+        - tags
+        - storage_security
+    validations:
+      required: true
+
+  - type: input
+    id: resource
+    attributes:
+      label: Terraform Resource Address
+      description: Enter the exact Terraform resource address.
+      placeholder: azurerm_linux_virtual_machine.example
+    validations:
+      required: true
+
+  - type: input
+    id: approved_value
+    attributes:
+      label: Requested Exception Value
+      description: Enter the value requiring an exemption.
+      placeholder: Standard_D8s_v5
+    validations:
+      required: true
+
+  - type: textarea
+    id: reason
+    attributes:
+      label: Business Justification
+      description: Explain why this exemption is required.
+      placeholder: Temporary performance testing requires a larger VM.
+    validations:
+      required: true
+
+  - type: input
+    id: ticket
+    attributes:
+      label: Change or Approval Ticket
+      placeholder: POC-APP-A-001
+    validations:
+      required: true
+
+  - type: input
+    id: expiry
+    attributes:
+      label: Exemption Expiry Date
+      description: Enter the requested expiry date in YYYY-MM-DD format.
+      placeholder: "2026-11-30"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: Confirmation
+      options:
+        - label: I understand that the exemption requires approval before it becomes active.
+          required: true
