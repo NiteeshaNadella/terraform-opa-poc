@@ -90,3 +90,109 @@ jobs:
 
           echo "OPA policy validation PASSED"
 
+      
+            # Application A - Terraform validation
+      - name: Application A - Terraform Init
+        working-directory: applications/application-a
+        run: terraform init -input=false
+
+      - name: Application A - Terraform Validate
+        working-directory: applications/application-a
+        run: terraform validate
+
+      - name: Application A - Terraform Plan
+        working-directory: applications/application-a
+        run: terraform plan -input=false -out=plan.tfplan
+
+      - name: Application A - Convert Plan to JSON
+        working-directory: applications/application-a
+        run: terraform show -json plan.tfplan > plan.tfplan.json
+
+      # Application B - Terraform validation
+      - name: Application B - Terraform Init
+        working-directory: applications/application-b
+        run: terraform init -input=false
+
+      - name: Application B - Terraform Validate
+        working-directory: applications/application-b
+        run: terraform validate
+
+      - name: Application B - Terraform Plan
+        working-directory: applications/application-b
+        run: terraform plan -input=false -out=plan.tfplan
+
+      - name: Application B - Convert Plan to JSON
+        working-directory: applications/application-b
+        run: terraform show -json plan.tfplan > plan.tfplan.json
+
+      # Application-specific OPA exemption validation
+      - name: Validate Application-Specific Exemptions
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "===================================="
+          echo "TEST 1: Application A with exemption"
+          echo "===================================="
+
+          app_a_decision=$(opa eval \
+            --format raw \
+            --data policies \
+            --data applications/application-a/context.json \
+            --data exemptions/application-a.json \
+            --input applications/application-a/plan.tfplan.json \
+            'data.terraform.governance.allow')
+
+          echo "Application A Decision: $app_a_decision"
+
+          echo "===================================="
+          echo "TEST 2: Application B without exemption"
+          echo "===================================="
+
+          app_b_decision=$(opa eval \
+            --format raw \
+            --data policies \
+            --data applications/application-b/context.json \
+            --data exemptions/application-b.json \
+            --input applications/application-b/plan.tfplan.json \
+            'data.terraform.governance.allow')
+
+          echo "Application B Decision: $app_b_decision"
+
+          echo "===================================="
+          echo "TEST 3: Application B using A's exemption"
+          echo "===================================="
+
+          isolation_decision=$(opa eval \
+            --format raw \
+            --data policies \
+            --data applications/application-b/context.json \
+            --data exemptions/application-a.json \
+            --input applications/application-b/plan.tfplan.json \
+            'data.terraform.governance.allow')
+
+          echo "Application Isolation Decision: $isolation_decision"
+
+          echo "===================================="
+          echo "FINAL VALIDATION"
+          echo "===================================="
+
+          if [ "$app_a_decision" != "true" ]; then
+            echo "FAILED: Application A exemption was not accepted."
+            exit 1
+          fi
+
+          if [ "$app_b_decision" != "false" ]; then
+            echo "FAILED: Application B did not follow baseline policy."
+            exit 1
+          fi
+
+          if [ "$isolation_decision" != "false" ]; then
+            echo "FAILED: Application B incorrectly used Application A's exemption."
+            exit 1
+          fi
+
+          echo "PASSED: Application A exemption accepted."
+          echo "PASSED: Application B baseline violation rejected."
+          echo "PASSED: Cross-application exemption rejected."
+          echo "All application-specific OPA tests PASSED."
