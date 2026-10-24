@@ -746,7 +746,660 @@ non-exempted violations continue to fail the validation.
 <img width="1342" height="691" alt="image" src="https://github.com/user-attachments/assets/76c67f46-aa05-45b5-a76d-8c16b179fb4c" />
 
 
+---
 
+
+
+# Application-Specific OPA Governance and Exemption Management
+
+## 1. Overview
+
+This project extends the existing Terraform and Open Policy Agent (OPA)
+governance implementation to support application-specific policy exemptions.
+
+The objective is to demonstrate how multiple applications can use common
+infrastructure governance policies while maintaining independent exemption
+configurations.
+
+The solution consists of two components:
+
+1. Application-specific policy validation using Terraform, OPA, and JSON.
+2. Exemption request and approval automation using GitHub Issues and GitHub Actions.
+
+The first component enforces infrastructure governance policies.
+
+The second component simplifies how new policy exemptions are requested,
+reviewed, and added to the configuration.
+
+Both components operate together, but application-specific policy validation
+can also function independently without the approval automation.
+
+---
+
+## 2. Requirements
+
+The extended implementation addresses the following requirements:
+
+- Apply common OPA governance policies to multiple applications.
+- Support application-specific policy exemptions.
+- Prevent exemptions from one application being used by another.
+- Validate exemption details such as resource, policy, reason, ticket, and expiry.
+- Reject infrastructure changes that violate policies without valid exemptions.
+- Integrate application-specific OPA validation into GitHub Actions.
+- Provide a configurable, code-based approach to exemption management.
+- Demonstrate a GitHub-based exemption request and approval mechanism.
+
+---
+
+# Part 1 — Application-Specific OPA Policy Validation
+
+The Terraform plan is generated independently for each application.
+
+OPA evaluates the Terraform plan against the common governance policies
+and the exemption configuration associated with the application.
+
+The same OPA policies are reused across applications.
+
+Application-specific exemption configurations determine whether a
+particular policy violation is permitted.
+
+
+### File Descriptions
+
+| File | Purpose |
+|------|---------|
+| applications/application-a/main.tf | Terraform infrastructure for Application A |
+| applications/application-b/main.tf | Terraform infrastructure for Application B |
+| context.json | Identifies the application being evaluated |
+| exemptions/application-a.json | Exemptions belonging to Application A |
+| exemptions/application-b.json | Exemptions belonging to Application B |
+| policy.rego | Validates mandatory resource tags |
+| vm_size.rego | Validates approved VM sizes and applicable exemptions |
+| storage_security.rego | Validates Azure Storage Account security |
+| governance.rego | Combines governance policy decisions |
+| terraform-opa.yml | Terraform and OPA validation workflow |
+| exemption-request.yml | GitHub exemption request form |
+| opa-exemption-approval.yml | GitHub exemption approval automation |
+
+---
+
+## 3. Common OPA Governance Policies
+
+The project uses three infrastructure governance policies.
+
+### Policy 1 — Mandatory Resource Tags
+
+Ensures that applicable infrastructure resources contain the required
+governance tags.
+
+The tags include:
+
+- environment
+- project
+- owner
+- costcenter
+
+A missing mandatory tag results in a policy violation unless an
+applicable valid exemption exists.
+
+### Policy 2 — Approved VM Sizes
+
+Ensures that Linux virtual machines use approved sizes.
+
+Approved sizes:
+
+```rego
+approved_sizes := {"Standard_B1s", "Standard_B1ms"}
+```
+
+A VM requesting another size normally violates the policy.
+
+An application-specific exemption can permit a different VM size
+for the identified resource.
+
+### Policy 3 — Azure Storage Security
+
+Ensures that Azure Storage Accounts do not permit public blob access
+unless an applicable valid exemption exists.
+
+The compliant Terraform configuration is:
+
+```hcl
+allow_nested_items_to_be_public = false
+```
+
+### Common Governance
+
+The governance policy combines the individual policy results.
+
+The overall governance decision succeeds only when the evaluated
+policies have no outstanding, non-exempted violations.
+
+---
+
+## 4. Application Context
+
+Each application includes a context.json file.
+
+This identifies which application is being evaluated.
+
+### Application A
+
+File: applications/application-a/context.json
+
+```json
+{
+  "application_context": {
+    "id": "application-a"
+  }
+}
+```
+
+### Application B
+
+File: applications/application-b/context.json
+
+```json
+{
+  "application_context": {
+    "id": "application-b"
+  }
+}
+```
+
+OPA uses the application identity when evaluating applicable exemptions.
+
+An exemption belonging to Application A must not automatically
+apply to Application B.
+
+---
+
+## 5. Application-Specific Exemptions
+
+### Application A
+
+Application A requires a VM size outside the standard approved list.
+
+Example Terraform configuration:
+
+```hcl
+size = "Standard_D8s_v5"
+```
+
+The size is not included in:
+
+```rego
+approved_sizes := {"Standard_B1s", "Standard_B1ms"}
+```
+
+Therefore, it normally violates the VM-size policy.
+
+However, Application A has an exemption in:
+
+exemptions/application-a.json
+
+The exemption contains the following information:
+
+```json
+{
+  "application": "application-a",
+  "policy": "vm_size",
+  "resource": "azurerm_linux_virtual_machine.example",
+  "approved_size": "Standard_D8s_v5",
+  "reason": "Temporary performance testing for Application A",
+  "ticket": "POC-APP-A-001",
+  "expires_at": "2026-11-30T23:59:59Z"
+}
+```
+
+OPA validates:
+
+1. The application identity.
+2. The policy name.
+3. The Terraform resource address.
+4. The requested VM size.
+5. The exemption justification.
+6. The ticket number.
+7. The expiry date.
+
+When the exemption is applicable and valid, the VM-size violation
+is permitted.
+
+Expected result:
+
+```text
+Application A Decision: true
+```
+
+### Application B
+
+Application B requests the same unapproved VM size:
+
+```hcl
+size = "Standard_D8s_v5"
+```
+
+However, the Application B exemption file contains:
+
+```json
+{
+  "exemptions": []
+}
+```
+
+No exemption applies to Application B.
+
+Expected result:
+
+```text
+Application B Decision: false
+```
+
+---
+
+## 6. Cross-Application Exemption Isolation
+
+An additional test verifies that Application B cannot use
+Application A's exemption.
+
+The test evaluates:
+
+- Application B's Terraform plan.
+- Application B's application context.
+- Application A's exemption configuration.
+
+Although Application A has an exemption for Standard_D8s_v5,
+the exemption is not valid for Application B.
+
+Expected result:
+
+```text
+Application Isolation Decision: false
+```
+
+This demonstrates that exemptions are restricted to the
+application identified in the exemption configuration.
+
+---
+
+## 7. Local OPA Validation Commands
+
+The following commands are executed from the repository root.
+
+### Test 1 — Application A With Valid Exemption
+
+```powershell
+opa eval --format pretty --data policies --data applications/application-a/context.json --data exemptions/application-a.json --input applications/application-a/plan.tfplan.json "data.terraform.governance.allow"
+```
+
+Expected output:
+
+```text
+true
+```
+
+### Test 2 — Application B Without Exemption
+
+```powershell
+opa eval --format pretty --data policies --data applications/application-b/context.json --data exemptions/application-b.json --input applications/application-b/plan.tfplan.json "data.terraform.governance.allow"
+```
+
+Expected output:
+
+```text
+false
+```
+
+### Test 3 — Application B Attempting to Use Application A's Exemption
+
+```powershell
+opa eval --format pretty --data policies --data applications/application-b/context.json --data exemptions/application-a.json --input applications/application-b/plan.tfplan.json "data.terraform.governance.allow"
+```
+
+Expected output:
+
+```text
+false
+```
+
+
+## 8. GitHub Actions — Multi-Application Validation
+
+The existing GitHub Actions workflow was extended to validate
+Application A and Application B independently.
+
+Workflow:
+
+.github/workflows/terraform-opa.yml
+
+### Expected Results
+
+| Scenario | Expected Decision | Test Result |
+|----------|-------------------|-------------|
+| Application A with valid exemption | true | PASS |
+| Application B without exemption | false | PASS |
+| Application B using Application A's exemption | false | PASS |
+
+GitHub Actions confirmed:
+
+```text
+Application A Decision: true
+Application B Decision: false
+Application Isolation Decision: false
+
+PASSED: Application A exemption accepted.
+PASSED: Application B baseline violation rejected.
+PASSED: Cross-application exemption rejected.
+
+All application-specific OPA tests PASSED.
+```
+
+In this demonstration, a false OPA decision for Application B
+is an expected test result.
+
+The GitHub Actions job succeeds because it correctly detects
+the expected rejection.
+
+<img width="1315" height="630" alt="image" src="https://github.com/user-attachments/assets/9b95303b-a3b7-4886-93d1-531182d887b6" />
+
+
+
+
+# Part 2 — GitHub-Based Exemption Request and Approval Automation
+
+## 1. Overview
+
+The second component provides a GitHub-based mechanism for
+requesting and reviewing new policy exemptions.
+
+Without this automation, an authorized engineer can manually
+update an application-specific exemption JSON file through
+a reviewed code change.
+
+The GitHub-based mechanism simplifies this process by allowing
+application teams to submit structured exemption requests.
+
+For the implemented POC, the approval automation supports
+VM-size exemptions.
+
+---
+
+## 2. Exemption Request
+
+The workflow does not automatically merge exemption requests.
+
+A submitted request does not automatically provide
+an active exemption.
+
+---
+
+## 3. GitHub Exemption Request Form
+
+File:
+
+.github/ISSUE_TEMPLATE/exemption-request.yml
+
+The form collects:
+
+- Application name
+- OPA policy
+- Terraform resource address
+- Requested exception value
+- Business justification
+- Change or approval ticket
+- Exemption expiry date
+- Requester confirmation
+
+### Creating a Request
+
+Navigate to:
+
+GitHub Repository → Issues → New Issue
+
+Select:
+
+OPA Policy Exemption Request
+
+Complete the required fields and submit the issue.
+
+### Demonstration
+
+GitHub Issue #3 was created to request an additional
+VM-size exemption for Application A.
+
+Request details:
+
+| Field | Value |
+|-------|-------|
+| Application | application-a |
+| Policy | vm_size |
+| Resource | azurerm_linux_virtual_machine.example |
+| Requested size | Standard_D4s_v5 |
+| Reason | Temporary testing requires an additional VM size |
+| Ticket | POC-APP-003 |
+| Expiry | 2026-11-30 |
+
+The request was initially open and had not yet updated
+the exemption configuration.
+
+<img width="1155" height="643" alt="image" src="https://github.com/user-attachments/assets/ac567034-4417-4b43-985e-e7057d417602" />
+
+
+## 4. Exemption Approval Workflow
+
+File:
+
+.github/workflows/opa-exemption-approval.yml
+
+The workflow uses the GitHub issue_comment event.
+
+The authorized approver posts:
+
+```text
+/approve-opa
+```
+
+The workflow verifies the approver identity before
+processing the request.
+
+For this POC, the configured approver is:
+
+```text
+NiteeshaNadella
+```
+
+The approval workflow performs the following operations:
+
+1. Detects the approval comment.
+2. Verifies that the comment was submitted by the configured approver.
+3. Reads the GitHub issue.
+4. Extracts the exemption details.
+5. Validates the supported application and policy.
+6. Validates the resource address and requested VM size.
+7. Checks the justification, ticket, and expiry date.
+8. Checks for an existing matching exemption.
+9. Creates a new Git branch.
+10. Generates an updated application-specific exemption JSON file.
+11. Commits the proposed change.
+12. Creates a pull request for review.
+13. Posts the pull request reference on the GitHub issue.
+
+The pull request must be reviewed and merged before
+the new exemption configuration becomes active.
+
+
+Approval workflow Success
+
+<img width="1337" height="634" alt="image" src="https://github.com/user-attachments/assets/30a73b90-eed7-4748-8602-77977f20957d" />
+
+---
+
+## 5. Demonstration — Approved Exemption
+
+The following steps were demonstrated:
+
+### Step 1 — Submit the Request
+
+GitHub Issue #3 requested an additional VM-size exemption
+for Application A.
+
+Requested VM size:
+
+```text
+Standard_D4s_v5
+```
+
+### Step 2 — Approve the Request
+
+The authorized approver commented:
+
+```text
+/approve-opa
+```
+
+### Step 3 — Execute Approval Automation
+
+GitHub Actions executed the OPA Exemption Approval workflow.
+
+The workflow validated the request and generated
+a proposed exemption configuration change.
+
+### Step 4 — Create Pull Request
+
+The automation created:
+
+Pull Request #4
+
+Title:
+
+```text
+OPA exemption: application-a - vm_size
+```
+
+### Step 5 — Review the JSON Changes
+
+The pull request added a new exemption:
+
+```json
+{
+  "application": "application-a",
+  "policy": "vm_size",
+  "resource": "azurerm_linux_virtual_machine.example",
+  "approved_size": "Standard_D4s_v5",
+  "reason": "Temporary testing requires an additional VM size.",
+  "ticket": "POC-APP-003",
+  "expires_at": "2026-11-30T23:59:59Z"
+}
+```
+
+The existing Standard_D8s_v5 exemption was preserved.
+
+### Step 6 — Merge Pull Request
+
+Pull Request #4 was reviewed and merged into main.
+
+### Step 7 — Run Terraform OPA Validation
+
+The merge triggered the Terraform OPA Policy Validation workflow.
+
+The workflow completed successfully.
+
+This demonstrated that the updated exemption configuration
+did not break the existing governance validation.
+
+A separate Terraform plan evaluation using Standard_D4s_v5
+would be required to independently demonstrate that the
+newly added exemption permits that VM size.
+
+#### 1. GitHub Exemption Request — Issue #3
+
+Application A submitted an exemption request through GitHub Issues
+to use an additional VM size, Standard_D4s_v5.
+
+The request includes the application name, policy, Terraform resource,
+requested VM size, business justification, ticket number, and expiry date.
+
+
+<img width="1327" height="645" alt="image" src="https://github.com/user-attachments/assets/9d1e5d13-df91-4e34-bd01-14aae6c07c16" />
+
+
+<img width="1245" height="638" alt="image" src="https://github.com/user-attachments/assets/d9b848a1-4fe2-40b2-857f-2c28827fb69e" />
+
+
+Generate Exemptions
+
+<img width="1337" height="626" alt="image" src="https://github.com/user-attachments/assets/e0862883-f89b-43ce-9b64-cf400b0f63f6" />
+
+
+Pull request Merged and closed
+
+<img width="1265" height="634" alt="image" src="https://github.com/user-attachments/assets/4f36d812-6044-4181-ad6d-680b60283fa5" />
+
+
+Governance After Merge
+
+<img width="1339" height="627" alt="image" src="https://github.com/user-attachments/assets/be9fef4c-58cb-4d95-8ab7-fdb891178dda" />
+
+
+## 6. Security and Governance Considerations
+
+The implementation demonstrates several governance controls:
+
+### Application Isolation
+
+An exemption is matched against the application identity.
+
+An exemption belonging to Application A cannot be
+reused by Application B.
+
+### Policy-Specific Exemptions
+
+An exemption identifies the relevant OPA policy.
+
+An exemption for VM-size validation does not automatically
+exempt other infrastructure policies.
+
+### Resource-Specific Exemptions
+
+The exemption references a specific Terraform resource address.
+
+### Expiry Validation
+
+The expiry date is evaluated to determine whether
+the exemption remains valid.
+
+
+---
+
+## 7. Conclusion
+
+This proof of concept demonstrates the integration of
+Terraform, Open Policy Agent, Rego, JSON-based policy exemptions,
+and GitHub Actions.
+
+The implementation enforces common governance policies
+across multiple applications while allowing approved,
+application-specific policy exceptions.
+
+Application A successfully passed governance validation
+using its valid VM-size exemption.
+
+Application B failed governance validation when requesting
+the same unapproved VM size without an exemption.
+
+Cross-application testing confirmed that Application B
+could not reuse Application A's exemption.
+
+An additional GitHub-based exemption management process
+was implemented to demonstrate structured exemption requests,
+authorized processing, automated pull request creation,
+review, and integration with the existing governance workflow.
+
+The solution provides a configurable, code-based approach to
+policy enforcement and exemption management without requiring
+a dedicated web portal.
+
+---
 
 
 
