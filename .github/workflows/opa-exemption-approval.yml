@@ -72,11 +72,29 @@ jobs:
             const ticket = getField('Change or Approval Ticket');
             const expiryDate = getField('Exemption Expiry Date');
 
-            // First implementation: Application A/B VM-size exemptions.
-            if (!['application-a', 'application-b'].includes(application)) {
-              throw new Error('Application is not approved.');
+            // Validate application name.
+            if (!/^[A-Za-z0-9_-]{1,80}$/.test(application)) {
+              throw new Error('Invalid application name.');
             }
 
+            // Confirm application is registered.
+            try {
+              await github.rest.repos.getContent({
+                owner,
+                repo,
+                path: `applications/${application}`,
+                ref: 'main'
+              });
+            } catch (error) {
+              if (error.status === 404) {
+                throw new Error(
+                  `Application ${application} is not registered.`
+                );
+              }
+              throw error;
+            }
+
+            // Current automation supports VM-size exemptions.
             if (policy !== 'vm_size') {
               throw new Error(
                 'Automation currently supports vm_size only.'
@@ -84,7 +102,7 @@ jobs:
             }
 
             if (
-              !/^azurerm_linux_virtual_machine\.[A-Za-z0-9_-]+$/.test(resource)
+              !/^azurerm_(linux|windows)_virtual_machine\.[A-Za-z0-9_-]+$/.test(resource)
             ) {
               throw new Error('Invalid Terraform VM resource.');
             }
@@ -114,27 +132,51 @@ jobs:
               throw new Error('Expiry date must be in the future.');
             }
 
-            // Read the application-specific exemption configuration.
+            // Determine application-specific exemption file.
             const path = `exemptions/${application}.json`;
 
-            const fileResponse = await github.rest.repos.getContent({
-              owner,
-              repo,
-              path,
-              ref: 'main'
-            });
+            // Load existing exemptions or initialize new file.
+            let file = null;
+            let configuration = { exemptions: [] };
 
-            const file = fileResponse.data;
+            try {
+              const fileResponse =
+                await github.rest.repos.getContent({
+                  owner,
+                  repo,
+                  path,
+                  ref: 'main'
+                });
 
-            const original = Buffer.from(
-              file.content,
-              'base64'
-            ).toString('utf8');
+              file = fileResponse.data;
 
-            const configuration = JSON.parse(original);
+              if (file.type !== 'file') {
+                throw new Error(
+                  'Exemption configuration is not a file.'
+                );
+              }
+
+              const content = Buffer.from(
+                file.content,
+                'base64'
+              ).toString('utf8');
+
+              configuration = JSON.parse(content);
+
+            } catch (error) {
+              if (error.status === 404) {
+                core.info(
+                  `Creating new exemption file for ${application}`
+                );
+              } else {
+                throw error;
+              }
+            }
 
             if (!Array.isArray(configuration.exemptions)) {
-              throw new Error('Invalid exemption configuration.');
+              throw new Error(
+                'Invalid exemption configuration.'
+              );
             }
 
             // Avoid duplicate exemption entries.
@@ -151,6 +193,7 @@ jobs:
               );
             }
 
+            // Add the approved exemption.
             configuration.exemptions.push({
               application,
               policy,
@@ -161,13 +204,14 @@ jobs:
               expires_at: expiresAt
             });
 
-            // Create a branch for review.
+            // Read main branch reference.
             const main = await github.rest.git.getRef({
               owner,
               repo,
               ref: 'heads/main'
             });
 
+            // Create a unique branch for the issue.
             const branch = `opa-exemption/issue-${issue}`;
 
             await github.rest.git.createRef({
@@ -177,8 +221,8 @@ jobs:
               sha: main.data.object.sha
             });
 
-            // Commit the proposed exemption to that branch.
-            await github.rest.repos.createOrUpdateFileContents({
+            // Create or update exemption JSON on branch.
+            const updateRequest = {
               owner,
               repo,
               path,
@@ -186,11 +230,19 @@ jobs:
               message: `Propose OPA exemption from issue #${issue}`,
               content: Buffer.from(
                 JSON.stringify(configuration, null, 2) + '\n'
-              ).toString('base64'),
-              sha: file.sha
-            });
+              ).toString('base64')
+            };
 
-            // Create a pull request. Do not automatically merge it.
+            // SHA is required only for an existing file.
+            if (file) {
+              updateRequest.sha = file.sha;
+            }
+
+            await github.rest.repos.createOrUpdateFileContents(
+              updateRequest
+            );
+
+            // Create pull request for review.
             const pull = await github.rest.pulls.create({
               owner,
               repo,
@@ -206,6 +258,7 @@ jobs:
                 `Review the proposed JSON change before merging.`
             });
 
+            // Notify requester.
             await github.rest.issues.createComment({
               owner,
               repo,
@@ -216,4 +269,6 @@ jobs:
                 `The exemption will become active only after the pull request is reviewed and merged.`
             });
 
-            core.info(`Created exemption PR #${pull.data.number}`);
+            core.info(
+              `Created exemption PR #${pull.data.number}`
+            );
