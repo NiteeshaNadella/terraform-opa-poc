@@ -64,31 +64,47 @@ jobs:
       - name: Validate Central OPA Policies
         run: opa check central-governance/policies
 
+      
       - name: Evaluate Central OPA Governance
         shell: bash
         run: |
           set -euo pipefail
 
+          # Identify the calling developer repository
           APP_ID="${GITHUB_REPOSITORY#*/}"
+          echo "Validating application: $APP_ID"
 
+          # Supply application identity to OPA
           printf '{"application_context":{"id":"%s"}}\n' \
             "$APP_ID" > /tmp/app-context.json
 
-          printf '{"exemptions":[]}\n' > /tmp/no-exemptions.json
+          # Locate approved exemptions in the central repository
+          EXEMPTION_FILE="central-governance/exemptions/${APP_ID}.json"
 
+          if [ -f "$EXEMPTION_FILE" ]; then
+            echo "Found approved exemptions for: $APP_ID"
+          else
+            echo "No approved exemptions for: $APP_ID"
+            printf '{"exemptions":[]}\n' > /tmp/empty-exemptions.json
+            EXEMPTION_FILE="/tmp/empty-exemptions.json"
+          fi
+
+          # Display violations
+          echo "Checking central OPA policies..."
           opa eval \
             --format pretty \
             --data central-governance/policies \
             --data /tmp/app-context.json \
-            --data /tmp/no-exemptions.json \
+            --data "$EXEMPTION_FILE" \
             --input plan.tfplan.json \
             'data.terraform.governance.deny'
 
+          # Enforce final governance decision
           decision=$(opa eval \
             --format raw \
             --data central-governance/policies \
             --data /tmp/app-context.json \
-            --data /tmp/no-exemptions.json \
+            --data "$EXEMPTION_FILE" \
             --input plan.tfplan.json \
             'data.terraform.governance.allow')
 
@@ -100,3 +116,4 @@ jobs:
           fi
 
           echo "Central OPA governance PASSED"
+
