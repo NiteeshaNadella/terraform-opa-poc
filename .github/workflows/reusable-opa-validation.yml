@@ -6,11 +6,18 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   validate:
     name: Central OPA Governance
     runs-on: ubuntu-latest
+
+    env:
+      ARM_USE_OIDC: "true"
+      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
     steps:
       - name: Checkout Developer Repository
@@ -23,7 +30,73 @@ jobs:
           ref: main
           path: central-governance
 
-      - name: Verify Central Policies
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Terraform Init
+        run: terraform init -backend=false -input=false
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        run: terraform plan -refresh=false -input=false -out=plan.tfplan
+
+      - name: Convert Terraform Plan to JSON
+        run: terraform show -json plan.tfplan > plan.tfplan.json
+
+      - name: Install OPA
         run: |
-          echo "Central governance repository checked out"
-          ls central-governance/policies
+          curl -fsSL -o opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64_static
+          chmod +x opa
+          sudo mv opa /usr/local/bin/opa
+          opa version
+
+      - name: Validate Central OPA Policies
+        run: opa check central-governance/policies
+
+      - name: Evaluate Central OPA Governance
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APP_ID="${GITHUB_REPOSITORY#*/}"
+
+          printf '{"application_context":{"id":"%s"}}\n' \
+            "$APP_ID" > /tmp/app-context.json
+
+          printf '{"exemptions":[]}\n' > /tmp/no-exemptions.json
+
+          opa eval \
+            --format pretty \
+            --data central-governance/policies \
+            --data /tmp/app-context.json \
+            --data /tmp/no-exemptions.json \
+            --input plan.tfplan.json \
+            'data.terraform.governance.deny'
+
+          decision=$(opa eval \
+            --format raw \
+            --data central-governance/policies \
+            --data /tmp/app-context.json \
+            --data /tmp/no-exemptions.json \
+            --input plan.tfplan.json \
+            'data.terraform.governance.allow')
+
+          echo "OPA Governance Decision: $decision"
+
+          if [ "$decision" != "true" ]; then
+            echo "Central OPA governance FAILED"
+            exit 1
+          fi
+
+          echo "Central OPA governance PASSED"
