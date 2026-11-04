@@ -1,0 +1,29 @@
+
+name: Reusable Terraform OPA Validation
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Central OPA Governance
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Developer Repository
+        uses: actions/checkout@v4
+
+      - name: Checkout Central Governance Policies
+        uses: actions/checkout@v4
+        with:
+          repository: NiteeshaNadella/terraform-opa-poc
+          ref: main
+          path: central-governance
+
+      - name: Verify Central Policies
+        run: |
+          echo "Central governance repository checked out"
+          ls central-governance/policies
