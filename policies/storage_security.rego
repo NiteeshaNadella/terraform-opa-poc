@@ -3,10 +3,16 @@ package terraform.storage_security
 
 import rego.v1
 
-# Check whether the storage account has a valid exemption.
+# Validate an application-specific storage exemption.
 valid_exemption(resource_address) if {
+    application := data.application_context.id
+
+    is_string(application)
+    application != ""
+
     some ex in data.exemptions
 
+    ex.application == application
     ex.policy == "storage_security"
     ex.resource == resource_address
 
@@ -17,11 +23,12 @@ valid_exemption(resource_address) if {
     trim(ex.ticket, " ") != ""
 
     is_string(ex.expires_at)
+
     expiry := time.parse_rfc3339_ns(ex.expires_at)
     expiry > time.now_ns()
 }
 
-# Public blob access is prohibited unless exempted.
+# Reject public blob access without a valid exemption.
 deny contains msg if {
     some resource in input.resource_changes
 

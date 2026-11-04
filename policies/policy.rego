@@ -10,11 +10,16 @@ required_tags := {
     "costcenter"
 }
 
-# A matching exemption must identify the resource and missing tag.
-# It also requires a reason, ticket, and a future expiry date.
+# Validate application-specific tag exemptions.
 valid_exemption(resource_address, missing_tag) if {
+    application := data.application_context.id
+
+    is_string(application)
+    application != ""
+
     some ex in data.exemptions
 
+    ex.application == application
     ex.policy == "tags"
     ex.resource == resource_address
     ex.tag == missing_tag
@@ -26,11 +31,12 @@ valid_exemption(resource_address, missing_tag) if {
     trim(ex.ticket, " ") != ""
 
     is_string(ex.expires_at)
+
     expiry := time.parse_rfc3339_ns(ex.expires_at)
     expiry > time.now_ns()
 }
 
-# Report missing tags unless a valid exemption exists.
+# Report missing mandatory tags.
 deny contains msg if {
     some resource in input.resource_changes
 
@@ -45,9 +51,10 @@ deny contains msg if {
     tags := object.get(resource.change.after, "tags", {})
 
     some tag in required_tags
+
     value := object.get(tags, tag, "")
 
-    trim(value, " ") == ""
+    value == ""
 
     not valid_exemption(resource.address, tag)
 

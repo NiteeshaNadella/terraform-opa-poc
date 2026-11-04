@@ -1,14 +1,18 @@
+
 package terraform.vm_size
 
 import rego.v1
 
 approved_sizes := {"Standard_B1s", "Standard_B1ms"}
 
-# Validate the common exemption requirements.
+# Validate an approved exemption.
 valid_exemption(exemption, address, size) if {
     exemption.policy == "vm_size"
     exemption.resource == address
     exemption.approved_size == size
+
+    is_string(exemption.application)
+    exemption.application != ""
 
     is_string(exemption.reason)
     trim(exemption.reason, " ") != ""
@@ -21,34 +25,30 @@ valid_exemption(exemption, address, size) if {
     expiry > time.now_ns()
 }
 
-# Application-specific exemption.
-# The application must match the context supplied to OPA.
+# Match exemption to the application being validated.
 exempted(address, size) if {
+    application := data.application_context.id
+    is_string(application)
+    application != ""
+
     some exemption in data.exemptions
 
     valid_exemption(exemption, address, size)
-
-    application := data.application_context.id
     exemption.application == application
 }
 
-# Backward compatibility for the original single-application POC.
-# Legacy exemptions apply only when no application context is loaded.
-exempted(address, size) if {
-    some exemption in data.exemptions
-
-    valid_exemption(exemption, address, size)
-
-    not data.application_context.id
-    not exemption.application
-}
-
-# Identify unapproved VM sizes without valid exemptions.
+# Reject unapproved Linux and Windows VM sizes.
+# Applies to both resource creation and updates.
 deny contains msg if {
     some rc in input.resource_changes
 
-    rc.type == "azurerm_linux_virtual_machine"
-    rc.change.actions[_] == "create"
+    rc.type in {
+        "azurerm_linux_virtual_machine",
+        "azurerm_windows_virtual_machine"
+    }
+
+    some action in rc.change.actions
+    action in {"create", "update"}
 
     size := rc.change.after.size
 
