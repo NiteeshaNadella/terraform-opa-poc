@@ -67,16 +67,19 @@ jobs:
           opa eval \
             --format pretty \
             --data policies \
+            --data context.json \
             --data exemptions.json \
             --input plan.tfplan.json \
             'data.terraform.governance.deny'
 
+      
       
       - name: Enforce OPA Governance
         run: |
           decision=$(opa eval \
             --format raw \
             --data policies \
+            --data context.json \
             --data exemptions.json \
             --input plan.tfplan.json \
             'data.terraform.governance.allow')
@@ -89,6 +92,7 @@ jobs:
           fi
 
           echo "OPA policy validation PASSED"
+
 
       
             # Application A - Terraform validation
