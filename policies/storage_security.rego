@@ -3,16 +3,14 @@ package terraform.storage_security
 
 import rego.v1
 
-
-# Validate a tag exemption for the correct application.
-valid_exemption(resource_address, missing_tag) if {
+# Validate storage account exemptions for the correct application.
+valid_exemption(resource_address) if {
     some ex in data.exemptions
 
-    ex.policy == "tags"
+    ex.policy == "storage_security"
     ex.resource == resource_address
-    ex.tag == missing_tag
 
-    # Application identity must match the exemption
+    # Exemption must belong to the calling application
     application := data.application_context.id
     ex.application == application
 
@@ -27,14 +25,12 @@ valid_exemption(resource_address, missing_tag) if {
     expiry > time.now_ns()
 }
 
-# Preserve legacy exemptions for the original POC.
-# These work only when no application context is provided.
-valid_exemption(resource_address, missing_tag) if {
+# Preserve original POC exemptions without application context.
+valid_exemption(resource_address) if {
     some ex in data.exemptions
 
-    ex.policy == "tags"
+    ex.policy == "storage_security"
     ex.resource == resource_address
-    ex.tag == missing_tag
 
     not data.application_context.id
     not ex.application
@@ -49,7 +45,6 @@ valid_exemption(resource_address, missing_tag) if {
     expiry := time.parse_rfc3339_ns(ex.expires_at)
     expiry > time.now_ns()
 }
-
 
 # Reject public blob access without a valid exemption.
 deny contains msg if {
