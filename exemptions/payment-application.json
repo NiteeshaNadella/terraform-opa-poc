@@ -1,0 +1,13 @@
+{
+  "exemptions": [
+    {
+      "application": "payment-application",
+      "policy": "tags",
+      "resource": "azurerm_resource_group.payment",
+      "tag": "project",
+      "reason": "Temporary exemption for testing centralized OPA governance across independent GitHub repositories.",
+      "ticket": "TEST-1002",
+      "expires_at": "2026-12-31T23:59:59Z"
+    }
+  ]
+}
