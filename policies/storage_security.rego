@@ -3,18 +3,18 @@ package terraform.storage_security
 
 import rego.v1
 
-# Validate an application-specific storage exemption.
-valid_exemption(resource_address) if {
-    application := data.application_context.id
 
-    is_string(application)
-    application != ""
-
+# Validate a tag exemption for the correct application.
+valid_exemption(resource_address, missing_tag) if {
     some ex in data.exemptions
 
-    ex.application == application
-    ex.policy == "storage_security"
+    ex.policy == "tags"
     ex.resource == resource_address
+    ex.tag == missing_tag
+
+    # Application identity must match the exemption
+    application := data.application_context.id
+    ex.application == application
 
     is_string(ex.reason)
     trim(ex.reason, " ") != ""
@@ -23,10 +23,33 @@ valid_exemption(resource_address) if {
     trim(ex.ticket, " ") != ""
 
     is_string(ex.expires_at)
-
     expiry := time.parse_rfc3339_ns(ex.expires_at)
     expiry > time.now_ns()
 }
+
+# Preserve legacy exemptions for the original POC.
+# These work only when no application context is provided.
+valid_exemption(resource_address, missing_tag) if {
+    some ex in data.exemptions
+
+    ex.policy == "tags"
+    ex.resource == resource_address
+    ex.tag == missing_tag
+
+    not data.application_context.id
+    not ex.application
+
+    is_string(ex.reason)
+    trim(ex.reason, " ") != ""
+
+    is_string(ex.ticket)
+    trim(ex.ticket, " ") != ""
+
+    is_string(ex.expires_at)
+    expiry := time.parse_rfc3339_ns(ex.expires_at)
+    expiry > time.now_ns()
+}
+
 
 # Reject public blob access without a valid exemption.
 deny contains msg if {
