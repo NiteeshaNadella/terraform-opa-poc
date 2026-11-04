@@ -27,13 +27,20 @@ jobs:
       - name: Validate OPA Policies
         run: opa check policies
 
-      - name: Test Application Isolation
+      - name: Test Application Resource and Expiry Isolation
         shell: bash
         run: |
           set -euo pipefail
 
-          # Simulate a Terraform plan with a missing project tag.
-          cat > /tmp/isolation-plan.json <<'EOF'
+          EXEMPTIONS="exemptions/payment-application.json"
+
+          if [ ! -f "$EXEMPTIONS" ]; then
+            echo "FAIL: Approved payment exemption not found."
+            exit 1
+          fi
+
+          # Create a simulated Terraform plan with a missing project tag.
+          cat > /tmp/payment-plan.json <<'EOF'
           {
             "resource_changes": [
               {
@@ -55,52 +62,140 @@ jobs:
           }
           EOF
 
-          EXEMPTIONS="exemptions/payment-application.json"
+          # Create a second plan with a different resource address.
+          cat > /tmp/other-plan.json <<'EOF'
+          {
+            "resource_changes": [
+              {
+                "address": "azurerm_resource_group.other",
+                "type": "azurerm_resource_group",
+                "change": {
+                  "actions": ["create"],
+                  "after": {
+                    "name": "rg-other-opa-demo",
+                    "tags": {
+                      "environment": "dev",
+                      "owner": "devops-team",
+                      "costcenter": "TEST1001"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+          EOF
 
-          if [ ! -f "$EXEMPTIONS" ]; then
-            echo "Approved payment-application exemption not found."
-            exit 1
-          fi
-
-          # Test 1: Correct application identity.
+          # Application identities.
           echo '{"application_context":{"id":"payment-application"}}' \
             > /tmp/payment-context.json
 
-          payment_decision=$(opa eval \
-            --format raw \
-            --data policies \
-            --data "$EXEMPTIONS" \
-            --data /tmp/payment-context.json \
-            --input /tmp/isolation-plan.json \
-            'data.terraform.governance.allow')
+          echo '{"application_context":{"id":"banking-application"}}' \
+            > /tmp/banking-context.json
 
-          echo "Payment application decision: $payment_decision"
+          # Helper function to evaluate the final governance decision.
+          evaluate() {
+            opa eval \
+              --format raw \
+              --data policies \
+              --data "$1" \
+              --data "$2" \
+              --input "$3" \
+              'data.terraform.governance.allow'
+          }
 
-          if [ "$payment_decision" != "true" ]; then
-            echo "FAIL: Approved payment exemption was rejected."
+          echo "======================================"
+          echo "TEST 1: Approved Application"
+          echo "======================================"
+
+          decision=$(evaluate \
+            "$EXEMPTIONS" \
+            /tmp/payment-context.json \
+            /tmp/payment-plan.json)
+
+          echo "Payment application decision: $decision"
+
+          if [ "$decision" != "true" ]; then
+            echo "FAIL: Approved exemption rejected."
             exit 1
           fi
 
           echo "PASS: Approved application exemption accepted."
 
-          # Test 2: Another application attempts to reuse it.
-          echo '{"application_context":{"id":"banking-application"}}' \
-            > /tmp/banking-context.json
+          echo "======================================"
+          echo "TEST 2: Cross-Application Isolation"
+          echo "======================================"
 
-          banking_decision=$(opa eval \
-            --format raw \
-            --data policies \
-            --data "$EXEMPTIONS" \
-            --data /tmp/banking-context.json \
-            --input /tmp/isolation-plan.json \
-            'data.terraform.governance.allow')
+          decision=$(evaluate \
+            "$EXEMPTIONS" \
+            /tmp/banking-context.json \
+            /tmp/payment-plan.json)
 
-          echo "Banking application decision: $banking_decision"
+          echo "Banking application decision: $decision"
 
-          if [ "$banking_decision" != "false" ]; then
-            echo "FAIL: Another application reused the payment exemption."
+          if [ "$decision" != "false" ]; then
+            echo "FAIL: Cross-application exemption reuse allowed."
             exit 1
           fi
 
           echo "PASS: Cross-application exemption reuse blocked."
-          echo "OPA APPLICATION ISOLATION TEST PASSED"
+
+          echo "======================================"
+          echo "TEST 3: Resource Isolation"
+          echo "======================================"
+
+          decision=$(evaluate \
+            "$EXEMPTIONS" \
+            /tmp/payment-context.json \
+            /tmp/other-plan.json)
+
+          echo "Different resource decision: $decision"
+
+          if [ "$decision" != "false" ]; then
+            echo "FAIL: Exemption applied to another resource."
+            exit 1
+          fi
+
+          echo "PASS: Cross-resource exemption reuse blocked."
+
+          echo "======================================"
+          echo "TEST 4: Expired Exemption"
+          echo "======================================"
+
+          # Create a temporary expired copy of the exemption.
+          # The approved exemption file remains unchanged.
+          python3 - <<'PY'
+          import json
+
+          with open("exemptions/payment-application.json") as f:
+              data = json.load(f)
+
+          for exemption in data["exemptions"]:
+              if (
+                  exemption.get("application") == "payment-application"
+                  and exemption.get("policy") == "tags"
+                  and exemption.get("resource") == "azurerm_resource_group.payment"
+                  and exemption.get("tag") == "project"
+              ):
+                  exemption["expires_at"] = "2025-01-01T00:00:00Z"
+
+          with open("/tmp/expired-exemptions.json", "w") as f:
+              json.dump(data, f)
+          PY
+
+          decision=$(evaluate \
+            /tmp/expired-exemptions.json \
+            /tmp/payment-context.json \
+            /tmp/payment-plan.json)
+
+          echo "Expired exemption decision: $decision"
+
+          if [ "$decision" != "false" ]; then
+            echo "FAIL: Expired exemption was accepted."
+            exit 1
+          fi
+
+          echo "PASS: Expired exemption correctly rejected."
+
+          echo "======================================"
+          echo "ALL FOUR OPA ISOLATION TESTS PASSED"
+          echo "======================================"
