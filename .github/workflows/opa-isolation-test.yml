@@ -27,7 +27,7 @@ jobs:
       - name: Validate OPA Policies
         run: opa check policies
 
-      - name: Test Application Resource and Expiry Isolation
+      - name: Test Application Resource Expiry and Tag Isolation
         shell: bash
         run: |
           set -euo pipefail
@@ -39,60 +39,141 @@ jobs:
             exit 1
           fi
 
-          # Create a simulated Terraform plan with a missing project tag.
-          cat > /tmp/payment-plan.json <<'EOF'
-          {
-            "resource_changes": [
-              {
-                "address": "azurerm_resource_group.payment",
-                "type": "azurerm_resource_group",
-                "change": {
-                  "actions": ["create"],
-                  "after": {
-                    "name": "rg-payment-opa-demo",
-                    "tags": {
-                      "environment": "dev",
-                      "owner": "devops-team",
-                      "costcenter": "TEST1001"
-                    }
+          # Test data is generated in /tmp.
+          # No existing policies or exemptions are modified.
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          output = Path("/tmp")
+
+          with open("exemptions/payment-application.json") as f:
+              approved = json.load(f)
+
+          matches = [
+              e for e in approved.get("exemptions", [])
+              if e.get("application") == "payment-application"
+              and e.get("policy") == "tags"
+              and e.get("resource") == "azurerm_resource_group.payment"
+              and e.get("tag") == "project"
+          ]
+
+          if len(matches) != 1:
+              raise SystemExit(
+                  "FAIL: Expected exactly one approved project-tag exemption."
+              )
+
+          (output / "payment-context.json").write_text(
+              json.dumps({
+                  "application_context": {
+                      "id": "payment-application"
                   }
-                }
-              }
-            ]
-          }
-          EOF
+              })
+          )
 
-          # Create a second plan with a different resource address.
-          cat > /tmp/other-plan.json <<'EOF'
-          {
-            "resource_changes": [
-              {
-                "address": "azurerm_resource_group.other",
-                "type": "azurerm_resource_group",
-                "change": {
-                  "actions": ["create"],
-                  "after": {
-                    "name": "rg-other-opa-demo",
-                    "tags": {
-                      "environment": "dev",
-                      "owner": "devops-team",
-                      "costcenter": "TEST1001"
-                    }
+          (output / "banking-context.json").write_text(
+              json.dumps({
+                  "application_context": {
+                      "id": "banking-application"
                   }
-                }
+              })
+          )
+
+          def create_plan(filename, address, tags):
+              plan = {
+                  "resource_changes": [
+                      {
+                          "address": address,
+                          "type": "azurerm_resource_group",
+                          "change": {
+                              "actions": ["create"],
+                              "after": {
+                                  "name": "rg-opa-isolation-demo",
+                                  "tags": tags
+                              }
+                          }
+                      }
+                  ]
               }
-            ]
-          }
-          EOF
 
-          # Application identities.
-          echo '{"application_context":{"id":"payment-application"}}' \
-            > /tmp/payment-context.json
+              (output / filename).write_text(
+                  json.dumps(plan, indent=2)
+              )
 
-          echo '{"application_context":{"id":"banking-application"}}' \
-            > /tmp/banking-context.json
+          # Test 1 and 2: Project tag missing.
+          create_plan(
+              "payment-plan.json",
+              "azurerm_resource_group.payment",
+              {
+                  "environment": "dev",
+                  "owner": "devops-team",
+                  "costcenter": "TEST1001"
+              }
+          )
 
-          # Helper function to evaluate the final governance decision.
+          # Test 3: Same violation on another resource.
+          create_plan(
+              "other-plan.json",
+              "azurerm_resource_group.other",
+              {
+                  "environment": "dev",
+                  "owner": "devops-team",
+                  "costcenter": "TEST1001"
+              }
+          )
+
+          # Test 5: Project and owner both missing.
+          create_plan(
+              "missing-project-owner.json",
+              "azurerm_resource_group.payment",
+              {
+                  "environment": "dev",
+                  "costcenter": "TEST1001"
+              }
+          )
+
+          # Test 6: Only costcenter missing.
+          create_plan(
+              "missing-costcenter.json",
+              "azurerm_resource_group.payment",
+              {
+                  "environment": "dev",
+                  "project": "payment-application",
+                  "owner": "devops-team"
+              }
+          )
+
+          # Test 7: Only project missing.
+          create_plan(
+              "missing-project-only.json",
+              "azurerm_resource_group.payment",
+              {
+                  "environment": "dev",
+                  "owner": "devops-team",
+                  "costcenter": "TEST1001"
+              }
+          )
+
+          # Create a temporary expired copy.
+          expired = json.loads(json.dumps(approved))
+
+          for exemption in expired["exemptions"]:
+              if (
+                  exemption.get("application") == "payment-application"
+                  and exemption.get("policy") == "tags"
+                  and exemption.get("resource") ==
+                      "azurerm_resource_group.payment"
+                  and exemption.get("tag") == "project"
+              ):
+                  exemption["expires_at"] = "2025-01-01T00:00:00Z"
+
+          (output / "expired-exemptions.json").write_text(
+              json.dumps(expired, indent=2)
+          )
+
+          print("Isolation test data generated successfully.")
+          PY
+
           evaluate() {
             opa eval \
               --format raw \
@@ -103,99 +184,90 @@ jobs:
               'data.terraform.governance.allow'
           }
 
-          echo "======================================"
-          echo "TEST 1: Approved Application"
-          echo "======================================"
+          assert_decision() {
+            local test_name="$1"
+            local expected="$2"
+            local exemption_file="$3"
+            local context_file="$4"
+            local plan_file="$5"
 
-          decision=$(evaluate \
+            echo "======================================"
+            echo "$test_name"
+            echo "======================================"
+
+            local decision
+            decision=$(evaluate \
+              "$exemption_file" \
+              "$context_file" \
+              "$plan_file")
+
+            echo "OPA Governance Decision: $decision"
+            echo "Expected Decision: $expected"
+
+            if [ "$decision" != "$expected" ]; then
+              echo "FAIL: $test_name"
+              exit 1
+            fi
+
+            echo "PASS: $test_name"
+          }
+
+          # TEST 1: Approved application.
+          assert_decision \
+            "TEST 1: Approved Application" \
+            "true" \
             "$EXEMPTIONS" \
             /tmp/payment-context.json \
-            /tmp/payment-plan.json)
+            /tmp/payment-plan.json
 
-          echo "Payment application decision: $decision"
-
-          if [ "$decision" != "true" ]; then
-            echo "FAIL: Approved exemption rejected."
-            exit 1
-          fi
-
-          echo "PASS: Approved application exemption accepted."
-
-          echo "======================================"
-          echo "TEST 2: Cross-Application Isolation"
-          echo "======================================"
-
-          decision=$(evaluate \
+          # TEST 2: Another application cannot reuse exemption.
+          assert_decision \
+            "TEST 2: Cross-Application Isolation" \
+            "false" \
             "$EXEMPTIONS" \
             /tmp/banking-context.json \
-            /tmp/payment-plan.json)
+            /tmp/payment-plan.json
 
-          echo "Banking application decision: $decision"
-
-          if [ "$decision" != "false" ]; then
-            echo "FAIL: Cross-application exemption reuse allowed."
-            exit 1
-          fi
-
-          echo "PASS: Cross-application exemption reuse blocked."
-
-          echo "======================================"
-          echo "TEST 3: Resource Isolation"
-          echo "======================================"
-
-          decision=$(evaluate \
+          # TEST 3: Another resource cannot reuse exemption.
+          assert_decision \
+            "TEST 3: Resource Isolation" \
+            "false" \
             "$EXEMPTIONS" \
             /tmp/payment-context.json \
-            /tmp/other-plan.json)
+            /tmp/other-plan.json
 
-          echo "Different resource decision: $decision"
-
-          if [ "$decision" != "false" ]; then
-            echo "FAIL: Exemption applied to another resource."
-            exit 1
-          fi
-
-          echo "PASS: Cross-resource exemption reuse blocked."
-
-          echo "======================================"
-          echo "TEST 4: Expired Exemption"
-          echo "======================================"
-
-          # Create a temporary expired copy of the exemption.
-          # The approved exemption file remains unchanged.
-          python3 - <<'PY'
-          import json
-
-          with open("exemptions/payment-application.json") as f:
-              data = json.load(f)
-
-          for exemption in data["exemptions"]:
-              if (
-                  exemption.get("application") == "payment-application"
-                  and exemption.get("policy") == "tags"
-                  and exemption.get("resource") == "azurerm_resource_group.payment"
-                  and exemption.get("tag") == "project"
-              ):
-                  exemption["expires_at"] = "2025-01-01T00:00:00Z"
-
-          with open("/tmp/expired-exemptions.json", "w") as f:
-              json.dump(data, f)
-          PY
-
-          decision=$(evaluate \
+          # TEST 4: Expired exemption must fail.
+          assert_decision \
+            "TEST 4: Expired Exemption" \
+            "false" \
             /tmp/expired-exemptions.json \
             /tmp/payment-context.json \
-            /tmp/payment-plan.json)
+            /tmp/payment-plan.json
 
-          echo "Expired exemption decision: $decision"
+          # TEST 5: Project is exempted, owner is not.
+          assert_decision \
+            "TEST 5: Missing Project and Owner" \
+            "false" \
+            "$EXEMPTIONS" \
+            /tmp/payment-context.json \
+            /tmp/missing-project-owner.json
 
-          if [ "$decision" != "false" ]; then
-            echo "FAIL: Expired exemption was accepted."
-            exit 1
-          fi
+          # TEST 6: Costcenter is not exempted.
+          assert_decision \
+            "TEST 6: Missing Costcenter" \
+            "false" \
+            "$EXEMPTIONS" \
+            /tmp/payment-context.json \
+            /tmp/missing-costcenter.json
 
-          echo "PASS: Expired exemption correctly rejected."
+          # TEST 7: Only project missing, valid exemption.
+          assert_decision \
+            "TEST 7: Approved Project Tag Only" \
+            "true" \
+            "$EXEMPTIONS" \
+            /tmp/payment-context.json \
+            /tmp/missing-project-only.json
 
           echo "======================================"
-          echo "ALL FOUR OPA ISOLATION TESTS PASSED"
+          echo "ALL SEVEN OPA ISOLATION TESTS PASSED"
           echo "======================================"
