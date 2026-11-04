@@ -1,3 +1,4 @@
+
 name: OPA Exemption Approval
 
 on:
@@ -31,23 +32,19 @@ jobs:
             const repo = context.repo.repo;
             const issue = context.issue.number;
 
-            // Only the repository owner may approve exemptions.
-            if (
-              context.actor.toLowerCase() !==
-              'niteeshanadella'
-            ) {
+            // Only the designated POC administrator may approve.
+            if (context.actor.toLowerCase() !== 'niteeshanadella') {
               throw new Error('Unauthorized approver.');
             }
 
-            // Read the current issue.
+            // Read the exemption request issue.
             const response = await github.rest.issues.get({
               owner,
               repo,
               issue_number: issue
             });
 
-            const request = response.data;
-            const body = request.body || '';
+            const body = response.data.body || '';
 
             function getField(label) {
               const expression = new RegExp(
@@ -61,10 +58,17 @@ jobs:
                 throw new Error('Missing field: ' + label);
               }
 
-              return match[1].trim();
+              const value = match[1].trim();
+
+              if (!value || value === '_No response_') {
+                throw new Error('Empty field: ' + label);
+              }
+
+              return value;
             }
 
             const application = getField('Application Name');
+            const repository = getField('GitHub Repository');
             const policy = getField('OPA Policy');
             const resource = getField('Terraform Resource Address');
             const value = getField('Requested Exception Value');
@@ -77,40 +81,78 @@ jobs:
               throw new Error('Invalid application name.');
             }
 
-            // Confirm application is registered.
-            try {
-              await github.rest.repos.getContent({
-                owner,
-                repo,
-                path: `applications/${application}`,
-                ref: 'main'
-              });
-            } catch (error) {
-              if (error.status === 404) {
-                throw new Error(
-                  `Application ${application} is not registered.`
-                );
-              }
-              throw error;
+            // Validate the full repository identity.
+            const repositoryMatch = repository.match(
+              /^([A-Za-z0-9-]+)\/([A-Za-z0-9._-]+)$/
+            );
+
+            if (!repositoryMatch) {
+              throw new Error('Invalid GitHub repository format.');
             }
 
-            // Current automation supports VM-size exemptions.
-            if (policy !== 'vm_size') {
+            const repositoryOwner = repositoryMatch[1];
+            const repositoryName = repositoryMatch[2];
+
+            // POC trust boundary: only repositories owned by this account.
+            if (repositoryOwner.toLowerCase() !== owner.toLowerCase()) {
               throw new Error(
-                'Automation currently supports vm_size only.'
+                'Repository owner is not authorized for this POC.'
               );
             }
 
+            if (repositoryName.toLowerCase() !== application.toLowerCase()) {
+              throw new Error(
+                'Application name must match the GitHub repository name.'
+              );
+            }
+
+            // Verify that the independent GitHub repository exists.
+            const repositoryResponse = await github.rest.repos.get({
+              owner: repositoryOwner,
+              repo: repositoryName
+            });
+
             if (
-              !/^azurerm_(linux|windows)_virtual_machine\.[A-Za-z0-9_-]+$/.test(resource)
+              repositoryResponse.data.full_name.toLowerCase() !==
+              repository.toLowerCase()
             ) {
-              throw new Error('Invalid Terraform VM resource.');
+              throw new Error('Repository identity verification failed.');
             }
 
-            if (!/^Standard_[A-Za-z0-9_]+$/.test(value)) {
-              throw new Error('Invalid Azure VM size.');
+            core.info(`Verified repository: ${repository}`);
+
+            // Validate supported policy and exception value.
+            let exemptionValue = {};
+
+            if (policy === 'vm_size') {
+              if (!/^azurerm_(linux|windows)_virtual_machine\.[A-Za-z0-9_-]+$/.test(resource)) {
+                throw new Error('Invalid Terraform VM resource.');
+              }
+
+              if (!/^Standard_[A-Za-z0-9_]+$/.test(value)) {
+                throw new Error('Invalid Azure VM size.');
+              }
+
+              exemptionValue = { approved_size: value };
+
+            } else if (policy === 'tags') {
+              if (!/^azurerm_(resource_group|storage_account)\.[A-Za-z0-9_-]+$/.test(resource)) {
+                throw new Error('Invalid Terraform resource for tags policy.');
+              }
+
+              if (!['environment', 'project', 'owner', 'costcenter'].includes(value)) {
+                throw new Error('Invalid mandatory tag name.');
+              }
+
+              exemptionValue = { tag: value };
+
+            } else {
+              throw new Error(
+                'Only vm_size and tags exemptions are supported.'
+              );
             }
 
+            // Validate justification and approval ticket.
             if (!reason || reason.length > 2000) {
               throw new Error('Invalid business justification.');
             }
@@ -119,6 +161,7 @@ jobs:
               throw new Error('Invalid ticket number.');
             }
 
+            // Validate expiry date.
             if (!/^\d{4}-\d{2}-\d{2}$/.test(expiryDate)) {
               throw new Error('Invalid expiry date format.');
             }
@@ -132,86 +175,75 @@ jobs:
               throw new Error('Expiry date must be in the future.');
             }
 
-            // Determine application-specific exemption file.
+            // Determine central exemption file.
             const path = `exemptions/${application}.json`;
 
-            // Load existing exemptions or initialize new file.
             let file = null;
             let configuration = { exemptions: [] };
 
+            // Read existing exemptions or prepare a new file.
             try {
-              const fileResponse =
-                await github.rest.repos.getContent({
-                  owner,
-                  repo,
-                  path,
-                  ref: 'main'
-                });
+              const fileResponse = await github.rest.repos.getContent({
+                owner,
+                repo,
+                path,
+                ref: 'main'
+              });
 
               file = fileResponse.data;
 
               if (file.type !== 'file') {
-                throw new Error(
-                  'Exemption configuration is not a file.'
-                );
+                throw new Error('Exemption configuration is not a file.');
               }
 
-              const content = Buffer.from(
-                file.content,
-                'base64'
-              ).toString('utf8');
-
-              configuration = JSON.parse(content);
+              configuration = JSON.parse(
+                Buffer.from(file.content, 'base64').toString('utf8')
+              );
 
             } catch (error) {
               if (error.status === 404) {
-                core.info(
-                  `Creating new exemption file for ${application}`
-                );
+                core.info(`Creating exemption file for ${application}`);
               } else {
                 throw error;
               }
             }
 
             if (!Array.isArray(configuration.exemptions)) {
-              throw new Error(
-                'Invalid exemption configuration.'
-              );
+              throw new Error('Invalid exemption configuration.');
             }
 
-            // Avoid duplicate exemption entries.
+            // Prevent duplicate exemption entries.
             const duplicate = configuration.exemptions.some(e =>
               e.application === application &&
               e.policy === policy &&
               e.resource === resource &&
-              e.approved_size === value
+              (policy === 'vm_size'
+                ? e.approved_size === value
+                : e.tag === value)
             );
 
             if (duplicate) {
-              throw new Error(
-                'An exemption already exists for this application, resource and size.'
-              );
+              throw new Error('Duplicate exemption request.');
             }
 
-            // Add the approved exemption.
+            // Add the new exemption entry.
             configuration.exemptions.push({
               application,
               policy,
               resource,
-              approved_size: value,
+              ...exemptionValue,
               reason,
               ticket,
               expires_at: expiresAt
             });
 
-            // Read main branch reference.
+            // Create an exemption branch.
             const main = await github.rest.git.getRef({
               owner,
               repo,
               ref: 'heads/main'
             });
 
-            // Create a unique branch for the issue.
             const branch = `opa-exemption/issue-${issue}`;
 
             await github.rest.git.createRef({
@@ -221,7 +253,7 @@ jobs:
               sha: main.data.object.sha
             });
 
-            // Create or update exemption JSON on branch.
+            // Write the exemption JSON.
             const updateRequest = {
               owner,
               repo,
@@ -233,7 +265,6 @@ jobs:
               ).toString('base64')
             };
 
-            // SHA is required only for an existing file.
             if (file) {
               updateRequest.sha = file.sha;
             }
@@ -242,7 +273,7 @@ jobs:
               updateRequest
             );
 
-            // Create pull request for review.
+            // Create a pull request for administrator review.
             const pull = await github.rest.pulls.create({
               owner,
               repo,
@@ -251,24 +282,25 @@ jobs:
               base: 'main',
               body:
                 `Exemption requested in #${issue}.\n\n` +
+                `Repository: ${repository}\n\n` +
                 `Application: ${application}\n\n` +
                 `Policy: ${policy}\n\n` +
+                `Resource: ${resource}\n\n` +
+                `Exception value: ${value}\n\n` +
                 `Ticket: ${ticket}\n\n` +
                 `Expires: ${expiresAt}\n\n` +
                 `Review the proposed JSON change before merging.`
             });
 
-            // Notify requester.
+            // Comment on the original issue.
             await github.rest.issues.createComment({
               owner,
               repo,
               issue_number: issue,
               body:
                 `Approval received from @${context.actor}.\n\n` +
-                `A proposed exemption has been created: #${pull.data.number}.\n\n` +
-                `The exemption will become active only after the pull request is reviewed and merged.`
+                `Proposed exemption PR: #${pull.data.number}.\n\n` +
+                `The exemption becomes active after review and merge.`
             });
 
-            core.info(
-              `Created exemption PR #${pull.data.number}`
-            );
+            core.info(`Created exemption PR #${pull.data.number}`);

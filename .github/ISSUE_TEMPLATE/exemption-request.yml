@@ -1,92 +1,103 @@
+
 name: OPA Policy Exemption Request
 
-description: Request an exemption from an OPA infrastructure governance policy.
+description: Request an exemption from a centralized OPA infrastructure governance policy.
 
 title: "[OPA Exemption] "
 
 body:
-- type: markdown
-  attributes:
-    value: |
-      ## OPA Policy Exemption Request
-      Complete this form to request a policy exemption.
+  - type: markdown
+    attributes:
+      value: |
+        ## Centralized OPA Policy Exemption Request
 
-      All requests require review and approval.
-      Submitting this form does not automatically grant an exemption.
+        Developers can request exemptions for applications
+        maintained in separate GitHub repositories.
 
-- type: dropdown
-  id: application
-  attributes:
-    label: Application Name
-    description: Select the application requesting an exemption.
-    options:
-    - application-a
-    - application-b
-    - dummy-testing
-  validations:
-    required: true
+        You do not need to register your application manually
+        in the central governance repository.
 
-- type: dropdown
-  id: policy
-  attributes:
-    label: OPA Policy
-    description: Select the policy requiring an exemption.
-    options:
-    - vm_size
-    - tags
-    - storage_security
-  validations:
-    required: true
+        All exemptions require administrator approval.
+        An approved exemption becomes active only after
+        the generated pull request is reviewed and merged.
 
-- type: input
-  id: resource
-  attributes:
-    label: Terraform Resource Address
-    description: Enter the exact Terraform resource address.
-    placeholder: azurerm_linux_virtual_machine.example
-  validations:
-    required: true
-
-- type: input
-  id: approved_value
-  attributes:
-    label: Requested Exception Value
-    description: Enter the value requiring an exemption.
-    placeholder: Standard_D8s_v5
-  validations:
-    required: true
-
-- type: textarea
-  id: reason
-  attributes:
-    label: Business Justification
-    description: Explain why this exemption is required.
-    placeholder: Temporary performance testing requires a larger VM.
-  validations:
-    required: true
-
-- type: input
-  id: ticket
-  attributes:
-    label: Change or Approval Ticket
-    placeholder: POC-APP-A-001
-  validations:
-    required: true
-
-- type: input
-  id: expiry
-  attributes:
-    label: Exemption Expiry Date
-    description: Enter the requested expiry date in YYYY-MM-DD format.
-    placeholder: "2026-11-30"
-  validations:
-    required: true
-
-- type: checkboxes
-  id: confirmation
-  attributes:
-    label: Confirmation
-    options:
-    - label: I understand that the exemption requires approval before it becomes
-        active.
+  - type: input
+    id: application
+    attributes:
+      label: Application Name
+      description: Enter the GitHub repository name for your application.
+      placeholder: payment-application
+    validations:
       required: true
+
+  - type: input
+    id: repository
+    attributes:
+      label: GitHub Repository
+      description: Enter the full GitHub repository name, including the owner.
+      placeholder: NiteeshaNadella/payment-application
+    validations:
+      required: true
+
+  - type: dropdown
+    id: policy
+    attributes:
+      label: OPA Policy
+      description: Select the policy requiring an exemption.
+      options:
+        - vm_size
+        - tags
+    validations:
+      required: true
+
+  - type: input
+    id: resource
+    attributes:
+      label: Terraform Resource Address
+      description: Enter the exact Terraform resource address.
+      placeholder: azurerm_resource_group.payment
+    validations:
+      required: true
+
+  - type: input
+    id: approved_value
+    attributes:
+      label: Requested Exception Value
+      description: "For tags, enter the missing tag name. For VM size, enter the requested Azure VM size."
+      placeholder: project
+    validations:
+      required: true
+
+  - type: textarea
+    id: reason
+    attributes:
+      label: Business Justification
+      description: Explain why the exemption is required.
+      placeholder: Temporary exception required for governance testing.
+    validations:
+      required: true
+
+  - type: input
+    id: ticket
+    attributes:
+      label: Change or Approval Ticket
+      placeholder: TEST-1002
+    validations:
+      required: true
+
+  - type: input
+    id: expiry
+    attributes:
+      label: Exemption Expiry Date
+      description: Enter the requested expiry date in YYYY-MM-DD format.
+      placeholder: "2026-12-31"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: Confirmation
+      options:
+        - label: I understand that an exemption requires administrator approval and PR merge before becoming active.
+          required: true
