@@ -1,0 +1,106 @@
+
+name: OPA Application Isolation Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-isolation:
+    name: Verify Exemption Isolation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Central Governance Repository
+        uses: actions/checkout@v4
+
+      - name: Install OPA
+        run: |
+          curl -fsSL -o opa \
+            https://openpolicyagent.org/downloads/latest/opa_linux_amd64_static
+          chmod +x opa
+          sudo mv opa /usr/local/bin/opa
+          opa version
+
+      - name: Validate OPA Policies
+        run: opa check policies
+
+      - name: Test Application Isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Simulate a Terraform plan with a missing project tag.
+          cat > /tmp/isolation-plan.json <<'EOF'
+          {
+            "resource_changes": [
+              {
+                "address": "azurerm_resource_group.payment",
+                "type": "azurerm_resource_group",
+                "change": {
+                  "actions": ["create"],
+                  "after": {
+                    "name": "rg-payment-opa-demo",
+                    "tags": {
+                      "environment": "dev",
+                      "owner": "devops-team",
+                      "costcenter": "TEST1001"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+          EOF
+
+          EXEMPTIONS="exemptions/payment-application.json"
+
+          if [ ! -f "$EXEMPTIONS" ]; then
+            echo "Approved payment-application exemption not found."
+            exit 1
+          fi
+
+          # Test 1: Correct application identity.
+          echo '{"application_context":{"id":"payment-application"}}' \
+            > /tmp/payment-context.json
+
+          payment_decision=$(opa eval \
+            --format raw \
+            --data policies \
+            --data "$EXEMPTIONS" \
+            --data /tmp/payment-context.json \
+            --input /tmp/isolation-plan.json \
+            'data.terraform.governance.allow')
+
+          echo "Payment application decision: $payment_decision"
+
+          if [ "$payment_decision" != "true" ]; then
+            echo "FAIL: Approved payment exemption was rejected."
+            exit 1
+          fi
+
+          echo "PASS: Approved application exemption accepted."
+
+          # Test 2: Another application attempts to reuse it.
+          echo '{"application_context":{"id":"banking-application"}}' \
+            > /tmp/banking-context.json
+
+          banking_decision=$(opa eval \
+            --format raw \
+            --data policies \
+            --data "$EXEMPTIONS" \
+            --data /tmp/banking-context.json \
+            --input /tmp/isolation-plan.json \
+            'data.terraform.governance.allow')
+
+          echo "Banking application decision: $banking_decision"
+
+          if [ "$banking_decision" != "false" ]; then
+            echo "FAIL: Another application reused the payment exemption."
+            exit 1
+          fi
+
+          echo "PASS: Cross-application exemption reuse blocked."
+          echo "OPA APPLICATION ISOLATION TEST PASSED"
