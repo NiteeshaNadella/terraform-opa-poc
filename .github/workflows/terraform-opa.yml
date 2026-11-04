@@ -129,6 +129,75 @@ jobs:
         working-directory: applications/application-b
         run: terraform show -json plan.tfplan > plan.tfplan.json
 
+      
+      # Dummy-testing Terraform validation
+      - name: Dummy Testing - Terraform Init
+        working-directory: applications/dummy-testing
+        run: terraform init -input=false
+
+      - name: Dummy Testing - Terraform Validate
+        working-directory: applications/dummy-testing
+        run: terraform validate
+
+      - name: Dummy Testing - Terraform Plan
+        working-directory: applications/dummy-testing
+        env:
+          TF_VAR_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: terraform plan -input=false -out=plan.tfplan
+
+      - name: Dummy Testing - Convert Plan to JSON
+        working-directory: applications/dummy-testing
+        run: terraform show -json plan.tfplan > plan.tfplan.json
+
+      - name: Dummy Testing - Verify Approved Exemption
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Checking dummy-testing with approved exemption"
+
+          approved=$(opa eval \
+            --format raw \
+            --data policies \
+            --data applications/dummy-testing/context.json \
+            --data exemptions/dummy-testing.json \
+            --input applications/dummy-testing/plan.tfplan.json \
+            'data.terraform.governance.allow')
+
+          echo "Approved exemption decision: $approved"
+
+          if [ "$approved" != "true" ]; then
+            echo "FAILED: Approved exemption was not accepted"
+            exit 1
+          fi
+
+          echo "PASSED: Approved exemption accepted"
+
+      - name: Dummy Testing - Verify Rejection Without Exemption
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo '{"exemptions":[]}' > /tmp/no-exemptions.json
+
+          rejected=$(opa eval \
+            --format raw \
+            --data policies \
+            --data applications/dummy-testing/context.json \
+            --data /tmp/no-exemptions.json \
+            --input applications/dummy-testing/plan.tfplan.json \
+            'data.terraform.governance.allow')
+
+          echo "Without exemption decision: $rejected"
+
+          if [ "$rejected" != "false" ]; then
+            echo "FAILED: Unapproved VM size was not rejected"
+            exit 1
+          fi
+
+          echo "PASSED: Unapproved VM size correctly rejected"
+  
+
       # Application-specific OPA exemption validation
       - name: Validate Application-Specific Exemptions
         shell: bash
